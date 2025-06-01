@@ -54,7 +54,7 @@
 
 运行docker容器，替换容器映射路径
 
-`docker run -v /path/to/elec_room_info/data:/app/data`
+`docker compose build && docker compose up -d` 或 `docker run -v ./data:/app/data`
 
 ### 方式二：部署源代码
 
@@ -69,6 +69,14 @@
 运行程序
 
 `python3 elec_room_info/main.py`
+
+## 定时启动/暂停
+
+由于接口可能有时效限制，所以建议手动设置 crontab 来定时启动/暂停容器
+```
+30 8 * * * docker start elec_room_info
+55 23 * * * docker stop elec_room_info
+```
 
 ## Config 文件
 

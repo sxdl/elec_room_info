@@ -1,6 +1,8 @@
+import re
 import random
 import requests
 from datetime import datetime
+from typing import Optional
 
 from .record_csv import CSVRecordHandler
 from .config import Config
@@ -180,26 +182,88 @@ class ElecRoomQuery:
     #     except requests.RequestException as e:
     #         logger.error('Error autoQuery:', e)
 
+    def _extract_float(self, text_value: str) -> Optional[float]:
+        """
+        从可能包含非数字字符的字符串中稳健地提取浮点数。
+        例如："房间当前剩余电量14.60元" -> 14.60
+              "房间当前剩余金额35.22" -> 35.22
+              "14.30" -> 14.30
+        如果找不到或无法转换，则返回 None。
+        """
+        if text_value is None:
+            return None
+        # 正则表达式查找一个一个数字
+        match = re.search(r'(\d+\.?\d*)', str(text_value))
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                logger.error(f"Could not convert extracted string '{match.group(1)}' to float from '{text_value}'")
+                return None
+        else:
+            logger.warning(f"Could not find numeric value in '{text_value}'")
+            return None
+
     def query_balance(self):
         """
-        查询水电空调余额
-        :return: {'timestamp'. 'water_balance', 'electricity_balance', 'air_conditioner_balance'}
+        查询水电空调余额。
+        :return: 包含时间戳和各项余额（浮点数）的字典。
+                 如果任何一项查询或解析失败，则返回 None。
+                 Example: {'timestamp': '...', 'water_balance': 14.3, 'electricity_balance': 14.60, 'air_conditioner_balance': 35.22}
         """
-        query_response = self.query_elec_room_info(1), self.query_elec_room_info(
-            2), self.query_elec_room_info(3)
+        # type: 1(电), 2(空调), 3(水)
+        raw_electricity_info = self.query_elec_room_info(1)
+        raw_air_conditioner_info = self.query_elec_room_info(2)
+        raw_water_info = self.query_elec_room_info(3)
+
+        if raw_electricity_info is None or raw_air_conditioner_info is None or raw_water_info is None:
+            logger.error("Failed to retrieve raw data for one or more utilities. Check previous logs for query_elec_room_info errors.")
+            return None
+
+        electricity_balance = self._extract_float(raw_electricity_info)
+        air_conditioner_balance = self._extract_float(raw_air_conditioner_info)
+        water_balance_str_part = ""
+        if raw_water_info:
+            match_water_keyword = re.search(r'剩余水费([\d\.]+)', raw_water_info)
+            if match_water_keyword:
+                water_balance_str_part = match_water_keyword.group(0)
+            else:
+                parts = raw_water_info.split(',')
+                water_balance_str_part = parts[-1]
+
+        water_balance = self._extract_float(water_balance_str_part)
+
+        # 如果任何一个余额解析失败，则整个操作失败
+        if electricity_balance is None or air_conditioner_balance is None or water_balance is None:
+            logger.error(
+                f"Failed to parse one or more balances. Raw: E='{raw_electricity_info}', A='{raw_air_conditioner_info}', W='{raw_water_info}'. "
+                f"Parsed: E={electricity_balance}, A={air_conditioner_balance}, W={water_balance}"
+            )
+            return None
+
         record_data = {
             'timestamp': datetime.now().isoformat(),
-            'electricity_balance': query_response[0].replace('房间当前剩余电量', ''),
-            'air_conditioner_balance': query_response[1].replace('房间当前剩余金额', ''),
-            'water_balance': query_response[2].replace('剩余水费', '').split(',')[-1]
+            'electricity_balance': electricity_balance,
+            'air_conditioner_balance': air_conditioner_balance,
+            'water_balance': water_balance
         }
+        logger.info(f"Successfully queried and parsed balances: {record_data}")
         return record_data
 
     def record_data(self):
         """disposed"""
-        record_data = self.query_balance()
-        recorder = CSVRecordHandler(csv_file_path=self._CSV_FILE_PATH)
-        recorder.record(record_data)
+        balance_data = self.query_balance()
+        if balance_data and self._CSV_FILE_PATH:
+            try:
+                recorder = CSVRecordHandler(csv_file_path=self._CSV_FILE_PATH)
+                recorder.record(balance_data)
+                logger.info(f"Data recorded successfully to {self._CSV_FILE_PATH}: {balance_data}")
+            except Exception as e:
+                logger.error(f"Failed to record data to CSV at {self._CSV_FILE_PATH}: {e}")
+        elif not balance_data:
+            logger.warning("No balance data to record, query_balance might have failed or returned None.")
+        elif not self._CSV_FILE_PATH:
+            logger.warning("CSV_FILE_PATH is not set. Cannot record data.")
 
 
 if __name__ == '__main__':

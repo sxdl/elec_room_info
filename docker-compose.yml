@@ -1,9 +1,9 @@
-version: '3.8'
-
 services:
   elec_room_info:
+    build:
+      context: .
     image: elec_room_info:latest
-    container_name: elec_room_info  # 自定义容器名称
-    restart: unless-stopped  # 自动重启策略
+    container_name: elec_room_info
     volumes:
-      - /path/to/data_folder:/app/data  # 将本地的 data_folder 目录挂载到容器的 /app/data 目录
+      - ./data:/app/data # 默认 data 目录位于同目录下
+    restart: on-failure:3
